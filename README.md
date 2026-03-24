@@ -1,430 +1,361 @@
-# 测试用例生成器 (TestCase Generator)
+# TestCase Skill
 
-## 一、简介
+一个面向测试设计场景的 Cursor Skill / Python 工具集，用于把接口文档或需求文档快速转换成结构化测试用例。
 
-这是一个 Claude Code Skill（技能），可以根据你的需求文档或接口文档，自动生成功能测试用例和接口测试用例。
+它当前的定位不是“自动替代测试工程师”，而是帮助你更快地产出第一版测试资产，包括：
 
-**一句话功能**：上传 API 文档 → 自动生成 30+ 测试用例 → 导出为 pytest/Postman/JMeter 等格式
+- API 测试用例初稿
+- 功能测试用例初稿
+- 可评审、可执行、可二次加工的结构化输出
+- 文档已知断言与待确认断言的明确区分
 
----
+## 项目定位
 
-## 二、安装方法
+这个项目最适合承担下面这个角色：
 
-### 2.1 克隆或下载 Skill
+> 测试设计初稿生成工具，而不是测试结论生成工具。
 
-```bash
-# 1. 进入 Claude Skills 目录
-cd ~/.claude/skills
+也就是说，它的价值在于：
 
-# 2. 克隆本仓库（或手动复制文件夹）
-git clone https://github.com/your-username/testcase-generator.git
+- 缩短从文档到用例的第一步时间
+- 让测试工程师更快进入评审和细化阶段
+- 减少手工整理基础测试资产的重复工作
+- 降低“文档不完整却输出伪精确断言”的风险
 
-# 或者手动复制：将整个 testcase-generator 文件夹复制到 ~/.claude/skills/ 下
+## 核心能力
+
+- 支持 API 文档和需求文档两类输入
+- 自动判断当前输入更适合生成 API 用例还是功能用例
+- 支持 `Markdown`、`Excel`、`JSON`、`pytest`、`Postman`、`JMeter` 等多种输出格式
+- 为接口用例补充 `断言来源` 与 `是否为假设` 字段
+- 在文档缺失错误响应、权限响应、性能阈值等信息时，不伪造断言，直接标记为 `待确认`
+
+## 当前支持范围
+
+### 输入格式
+
+#### API 文档
+
+| 类型 | 扩展名 | 说明 |
+| ---- | ---- | ---- |
+| Postman Collection | `.json` | 解析 Postman 导出的接口集合 |
+| OpenAPI / Swagger | `.json` `.yaml` `.yml` | 解析 OpenAPI 2.x / 3.x 文档 |
+| HAR | `.har` | 解析抓包记录中的 HTTP 请求 |
+| Markdown API 文档 | `.md` | 适合章节式或表格式接口说明 |
+| JSON Schema / 类 OpenAPI JSON | `.json` | 适合包含 `paths` 的接口定义 |
+
+#### 需求文档
+
+| 类型 | 扩展名 | 说明 |
+| ---- | ---- | ---- |
+| Markdown | `.md` | 推荐，结构更稳定 |
+| Text | `.txt` | 适合简单需求或较短的功能描述 |
+
+### 输出格式
+
+| 输出格式 | 适用场景 | 说明 |
+| ---- | ---- | ---- |
+| `markdown` | 用例评审、归档 | 默认输出格式 |
+| `excel` | 手工测试执行 | 适合测试同学直接维护 |
+| `json` | 二次处理、平台接入 | 原始结构化结果 |
+| `pytest` | API 自动化初稿 | 仅适用于 API 测试用例 |
+| `postman` | Postman 导入执行 | 仅适用于 API 测试用例 |
+| `jmeter` | 性能测试计划初稿 | 仅适用于 API 测试用例 |
+| `all` | 一次导出多个格式 | 功能用例会自动跳过 API 专属格式 |
+
+## 项目结构
+
+```text
+.
+├── README.md
+└── skills/
+    └── testcase-generator/
+        ├── SKILL.md
+        ├── references/
+        │   └── testcase_examples.md
+        └── scripts/
+            ├── main.py
+            ├── testcase_generator.py
+            ├── parsers/
+            ├── generators/
+            ├── formatters/
+            └── utils/
 ```
 
-### 2.2 安装依赖（可选）
+关键文件说明：
+
+- `skills/testcase-generator/SKILL.md`：给 Cursor / Agent 使用的执行规程
+- `skills/testcase-generator/references/testcase_examples.md`：测试用例字段和样例参考
+- `skills/testcase-generator/scripts/main.py`：当前推荐的统一入口
+- `skills/testcase-generator/scripts/testcase_generator.py`：兼容旧版入口
+
+## 安装与依赖
+
+### 1. 克隆仓库
 
 ```bash
-cd ~/.claude/skills/testcase-generator/scripts
-
-# 安装 Python 依赖
-pip install openpyxl pyyaml
-
-# 可选依赖
-pip install requests jinja2
+git clone https://github.com/XIAOQING-Edison/TestCase-Skill.git
+cd TestCase-Skill
 ```
 
-### 2.3 验证安装
+### 2. 安装推荐依赖
 
 ```bash
-cd ~/.claude/skills/testcase-generator/scripts
-python main.py --help
-
-# 应该看到帮助信息
+pip install pyyaml openpyxl
 ```
 
----
+依赖说明：
 
-## 三、支持的输入格式
+- `pyyaml`：用于解析 `.yaml` / `.yml` 的 OpenAPI / Swagger 文档
+- `openpyxl`：用于导出 Excel
 
-### 3.1 接口文档
+如果你计划执行生成出来的 `pytest` 代码，还需要安装：
 
-| 格式 | 扩展名 | 说明 |
-|------|--------|------|
-| **Postman Collection** | `.json` | Postman 导出的接口集合 |
-| **OpenAPI / Swagger** | `.json`, `.yaml`, `.yml` | 标准 OpenAPI 2.0/3.0 规范 |
-| **HAR 格式** | `.har` | 浏览器抓包导出的 HTTP 归档 |
-| **Markdown API 文档** | `.md` | Markdown 格式的 API 文档 |
-| **JSON Schema** | `.json` | JSON Schema 格式定义 |
+```bash
+pip install pytest requests
+```
 
-### 3.2 需求文档
+## 使用方式
 
-| 格式 | 扩展名 | 说明 |
-|------|--------|------|
-| **Markdown** | `.md` | 功能需求描述文档 |
-| **Text** | `.txt` | 简单的文本需求 |
+### 方式一：作为 Cursor Skill 使用
 
-### 3.3 需求文档推荐结构
+当这个项目放入 Cursor Skill 目录后，可以直接在对话中这样调用：
 
-为了更稳定地生成功能测试用例，建议需求文档按“功能点 + 字段说明”的方式组织，例如：
+```text
+使用 testcase-generator，根据我的 openapi.yaml 生成 API 测试用例，模块名称叫 UserAPI，输出 markdown
+```
+
+```text
+使用 testcase-generator，根据 requirements.md 生成功能测试用例，模块名称叫 用户中心，输出 excel
+```
+
+```text
+使用 testcase-generator，根据 postman_collection.json 生成 pytest 测试代码，base URL 是 https://api.example.com
+```
+
+### 方式二：直接命令行调用
+
+推荐使用统一入口：
+
+```bash
+python skills/testcase-generator/scripts/main.py -i <输入文件> -o <输出格式> -m <模块名> [-b <base_url>] [-d <输出目录>] [-v]
+```
+
+参数说明：
+
+| 参数 | 简写 | 是否必填 | 说明 |
+| ---- | ---- | ---- | ---- |
+| `--input` | `-i` | 是 | 输入文件路径 |
+| `--output` | `-o` | 否 | 输出格式，默认 `markdown` |
+| `--module` | `-m` | 否 | 模块名称，默认 `TestModule` |
+| `--base-url` | `-b` | 否 | API 场景下使用的基础 URL |
+| `--output-dir` | `-d` | 否 | 输出目录，默认当前目录 |
+| `--verbose` | `-v` | 否 | 打印详细执行信息 |
+
+## 常见使用示例
+
+### 1. 从 OpenAPI 生成 Markdown 用例
+
+```bash
+python skills/testcase-generator/scripts/main.py   -i ./docs/openapi.yaml   -o markdown   -m UserAPI   -b https://api.example.com   -d ./output   -v
+```
+
+### 2. 从 Postman Collection 生成 pytest 初稿
+
+```bash
+python skills/testcase-generator/scripts/main.py   -i ./docs/postman_collection.json   -o pytest   -m PaymentAPI   -b https://api.example.com   -d ./output
+```
+
+### 3. 从需求文档生成功能测试用例
+
+```bash
+python skills/testcase-generator/scripts/main.py   -i ./docs/requirements.md   -o excel   -m 用户中心   -d ./output
+```
+
+### 4. 一次导出多个格式
+
+```bash
+python skills/testcase-generator/scripts/main.py   -i ./docs/openapi.yaml   -o all   -m AuthAPI   -b https://api.example.com   -d ./output
+```
+
+## 推荐输入文档写法
+
+### 需求文档推荐结构
+
+为了让功能测试用例生成更稳定，建议使用“功能点 + 字段说明”的写法。
 
 ```markdown
 # 用户中心需求
 
 ## 用户登录
+
 - 用户名：必填，string，长度 6-20
 - 密码：必填，string，长度 8-20
 - 验证码：选填，string
 
 ## 用户注册
+
 | 字段名 | 类型 | 必填 | 说明 |
-|--------|------|------|------|
+| ---- | ---- | ---- | ---- |
 | 用户名 | string | 是 | 6-20 位字母数字 |
 | 邮箱 | string | 是 | 用于接收验证邮件 |
 | 邀请码 | string | 否 | 渠道推广使用 |
 ```
 
-> 说明：当输入为需求文档时，工具会自动识别功能点并生成功能测试用例；输出格式推荐使用 `markdown`、`excel` 或 `json`。
+### API 文档建议
 
----
+如果你希望生成的 API 用例更接近可直接评审的结果，建议接口文档尽量提供：
 
-## 四、使用方法
+- 成功响应状态码
+- 错误响应状态码
+- 响应 description
+- 响应 schema
+- 鉴权方式说明
+- 性能 SLA 或响应时间要求
 
-### 4.1 准备你的文档
+文档越完整，输出越有参考价值。
 
-将你的接口文档或需求文档放到任意目录，例如：
+## 输出结果说明
 
-```
-/Users/yourname/projects/myapi/
-├── openapi.yaml          # Swagger/OpenAPI 文档
-├── postman.json          # Postman 集合
-└── requirements.md       # 需求文档
-```
-
-### 4.2 在 Claude Code 中调用
-
-在 Claude Code 对话框中，直接输入：
-
-```
-使用 testcase-generator skill，根据我的 openapi.yaml 生成测试用例，模块名称叫 UserAPI，base URL 是 https://api.example.com
-```
-
-### 4.3 Claude Code 会自动执行
-
-```bash
-# Claude Code 内部执行类似这样的命令：
-cd ~/.claude/skills/testcase-generator/scripts
-python main.py \
-    -i /path/to/your/openapi.yaml \
-    -o markdown \
-    -m UserAPI \
-    -b https://api.example.com \
-    -v
-```
-
-### 4.4 获取生成的测试用例
-
-Claude Code 会输出：
-- 测试用例统计（总数、优先级分布、测试类型）
-- 生成的文件列表
-- 部分用例预览
-- 断言来源与是否为假设标记（用于区分文档明确项和待确认项）
-
----
-
-## 五、命令行用法（进阶）
-
-如果你想直接使用命令行：
-
-### 5.1 基本命令
-
-```bash
-cd ~/.claude/skills/testcase-generator/scripts
-
-# 语法
-python main.py -i <输入文件> -o <输出格式> -m <模块名> -b <base_url>
-```
-
-### 5.2 参数说明
-
-| 参数 | 简写 | 说明 | 示例 |
-|------|------|------|------|
-| `--input` | `-i` | 输入文件路径（必填） | `-i api.yaml` |
-| `--output` | `-o` | 输出格式 | `-o markdown` |
-| `--module` | `-m` | 模块名称 | `-m UserAPI` |
-| `--base-url` | `-b` | API 基础 URL | `-b https://api.example.com` |
-| `--output-dir` | `-d` | 输出目录 | `-d ./output` |
-| `--verbose` | `-v` | 显示详细信息 | `-v` |
-
-### 5.3 输出格式选项
-
-| 格式 | 说明 | 用途 |
-|------|------|------|
-| `markdown` | Markdown 文档 | 用例评审、文档归档 |
-| `excel` | Excel 文件 | 手动测试执行 |
-| `pytest` | Python 测试代码 | 自动化测试 |
-| `postman` | Postman Collection | Postman 导入 |
-| `jmeter` | JMeter JMX 文件 | 性能测试 |
-| `json` | JSON 原始数据 | 程序处理 |
-| `all` | 所有格式 | 全面覆盖 |
-
-### 5.4 使用示例
-
-```bash
-# 示例 1：从 Postman 集合生成 Markdown 文档
-python main.py -i ~/api.postman_collection.json -o markdown -m AuthAPI
-
-# 示例 2：从 Swagger 生成 Excel 和 pytest 代码
-python main.py -i swagger.yaml -o all -m Payment -b https://api.payment.com
-
-# 示例 3：生成 JMeter 性能测试计划
-python main.py -i openapi.json -o jmeter -m LoadTest -b https://api.example.com
-
-# 示例 4：生成所有格式到指定目录
-python main.py -i api.json -o all -m User -b https://api.example.com -d ./testcases
-```
-
----
-
-## 六、输入文档示例
-
-### 6.1 Postman Collection 示例
-
-```json
-{
-  "info": {
-    "name": "用户服务",
-    "description": "用户相关接口"
-  },
-  "item": [
-    {
-      "name": "用户登录",
-      "request": {
-        "method": "POST",
-        "url": {
-          "raw": "{{baseUrl}}/api/v1/user/login",
-          "host": ["{{baseUrl}}"],
-          "path": ["api", "v1", "user", "login"]
-        },
-        "body": {
-          "mode": "raw",
-          "raw": "{\"username\": \"test\", \"password\": \"123456\"}"
-        }
-      }
-    }
-  ]
-}
-```
-
-### 6.2 OpenAPI/Swagger 示例
-
-```yaml
-openapi: 3.0.0
-info:
-  title: 用户服务 API
-  version: 1.0.0
-servers:
-  - url: https://api.example.com
-paths:
-  /api/v1/user/login:
-    post:
-      summary: 用户登录
-      parameters:
-        - name: username
-          in: body
-          required: true
-          schema:
-            type: string
-        - name: password
-          in: body
-          required: true
-          schema:
-            type: string
-      responses:
-        '200':
-          description: 登录成功
-```
-
----
-
-## 七、输出示例
-
-### 7.1 Markdown 输出预览
-
-```markdown
-# 测试用例报告
-
-## 基本信息
-
-| 字段 | 值 |
-|------|-----|
-| 模块名称 | UserAPI |
-| Base URL | https://api.example.com |
-| 生成时间 | 2024-01-24 11:00:00 |
-| 用例总数 | 30 |
-
-## 接口测试用例
-
-| 用例编号 | 用例标题 | 优先级 | 接口名称 |
-|----------|----------|--------|----------|
-| API_USERAPI_001 | 验证用户登录正常请求成功 | P0 | 用户登录 |
-| API_USERAPI_002 | 验证用户登录缺少必填参数 | P0 | 用户登录 |
-| API_USERAPI_003 | 验证用户登录SQL注入攻击 | P0 | 用户登录 |
-```
-
-### 7.3 断言可信度说明
-
-为了避免生成“看起来正确但未被文档证明”的断言，接口测试用例会额外输出以下字段：
+### API 测试用例常见字段
 
 | 字段 | 说明 |
-|------|------|
-| `断言来源` | 标记断言来自接口文档、响应 schema，还是待确认项 |
-| `是否为假设` | `否` 表示文档中已找到对应响应定义；`是` 表示文档未提供，需要人工确认 |
+| ---- | ---- |
+| `用例编号` | API 用例唯一标识 |
+| `用例标题` | 用例名称 |
+| `模块/优先级` | 模块和优先级组合值 |
+| `请求URL` | 接口地址 |
+| `请求类型` | HTTP 方法 |
+| `请求数据` | 请求示例数据 |
+| `预期响应状态` | 文档中已知状态码或 `待确认` |
+| `预期响应信息` | 文档中的响应描述、schema，或待确认说明 |
+| `断言来源` | 当前断言来自哪里 |
+| `是否为假设` | 当前断言是否为待确认假设 |
 
-当接口文档没有给出错误码、错误消息、性能 SLA 等信息时，工具不会再直接伪造这些断言，而是输出 `待确认` 提示。
+### 功能测试用例常见字段
 
-### 7.2 pytest 代码预览
+| 字段 | 说明 |
+| ---- | ---- |
+| `功能ID` | 功能用例唯一标识 |
+| `用例标题` | 用例名称 |
+| `功能模块` | 当前功能点名称 |
+| `测试数据` | 样例测试数据 |
+| `执行步骤` | 操作步骤 |
+| `预期结果` | 预期行为 |
+| `断言来源` | 当前默认标记为需求文档推导 |
+| `是否为假设` | 当前默认标记为 `是` |
 
-```python
-"""UserAPI 测试用例
-自动化生成的 pytest 测试代码
-"""
+## 关于“断言来源”和“是否为假设”
 
-import pytest
-import requests
+这是当前项目最重要的一项约束。
 
-BASE_URL = "https://api.example.com"
+目标是避免生成这种问题：
 
-class TestValidation:
-    """响应验证工具类"""
-    @staticmethod
-    def validate_response(response, expected_status=200):
-        assert response.status_code == expected_status
+- 看起来很专业
+- 但接口文档里其实没有写
+- 最后误导测试工程师直接拿去执行
 
-class TestUserLogin:
-    """用户登录测试类"""
+所以当前策略是：
 
-    def test_verify_user_login_success(self, base_url, headers):
-        """验证用户登录正常请求成功"""
-        url = f"{base_url}/api/v1/user/login"
-        response = requests.post(url, headers=headers, json={"username": "test"})
+- 文档里明确写了响应状态码、响应 description、响应 schema：直接使用
+- 文档里没写错误码、错误消息、权限失败响应、性能阈值：不伪造，直接标记 `待确认`
 
-        assert response.status_code == 200
-        TestValidation.validate_json(response)
-```
+示例：
 
----
+| 场景 | 输出结果 |
+| ---- | ---- |
+| 文档定义了 `200` 和响应 schema | `断言来源 = 接口文档 schema（200）`，`是否为假设 = 否` |
+| 文档没有定义 `400` / `401` / `403` | `断言来源 = 待确认（文档未提供对应响应定义）`，`是否为假设 = 是` |
+| 文档没有性能 SLA | 保留成功状态码，但性能阈值标记为待确认 |
 
-## 八、测试用例类型
+## 当前生成策略
 
-生成的测试用例覆盖以下维度：
+### API 用例
 
-| 类型 | 说明 | 优先级 |
-|------|------|--------|
-| **正向测试** | 正常参数请求、必填参数验证 | P0-P1 |
-| **反向测试** | 缺少参数、类型错误、越界、无效 JSON | P0-P2 |
-| **安全测试** | SQL 注入、XSS、未授权、Token 过期 | P0-P1 |
-| **性能测试** | 响应时间、并发请求、负载测试 | P1-P2 |
-| **兼容性测试** | 浏览器兼容、移动端兼容 | P1 |
+当前会覆盖以下维度：
 
----
+- 正向测试
+- 反向测试
+- 安全测试
+- 性能测试
 
-## 九、在 Claude Code 中的使用示例
+### 功能用例
 
-### 9.1 简单调用
+当前会覆盖以下维度：
 
-```
-> 使用 testcase-generator，根据我的 ~/api.yaml 生成测试用例
-```
+- 正向测试
+- 反向测试
+- 边界值测试
+- 安全测试
+- 兼容性测试
 
-### 9.2 指定参数
+说明：
 
-```
-> 使用 testcase-generator，解析 ~/Documents/postman_collection.json，
-   模块名称叫 PaymentAPI，base URL 是 https://api.payment.com，
-   输出为 pytest 和 postman 格式
-```
+- 这是“测试设计初稿覆盖”，不是最终上线测试集
+- 生成后仍建议测试工程师结合业务规则、账号体系、权限模型、环境约束进行二次筛选
 
-### 9.3 查看帮助
+## 当前限制与边界
 
-```
-> testcase-generator 有哪些输入格式支持？
-```
+为了避免误解，建议在使用前先了解这些边界：
 
----
+1. 功能测试用例目前更适合结构化需求文档，不适合极度口语化或非常松散的描述。
+2. `pytest`、`postman`、`jmeter` 只适用于 API 场景。
+3. 生成的 `pytest` / `Postman` 更适合作为自动化初稿，不代表可以零修改直接上线执行。
+4. 如果文档缺少错误响应定义，系统会明确标记 `待确认`，而不是替你猜测。
+5. 性能测试用例目前更偏“计划模板”，不是压测平台本身。
 
-## 十、常见问题
+## 适用场景
 
-### Q1: 生成的用例可以直接用吗？
+这个项目尤其适合以下情况：
 
-**答**: 生成的用例是模板，需要根据实际业务调整测试数据和预期结果。
+- 需要快速从接口文档生成第一版测试用例
+- 需求刚评审完，需要尽快拉出功能测试清单
+- 希望减少手工整理基础测试资产的时间
+- 希望把“文档已定义”和“人工待确认”区分开
+- 想先有结构化初稿，再交给测试工程师细化
 
-### Q2: 支持中文吗？
+## 不适合替代的工作
 
-**答**: 完全支持中文，包括用例标题、描述、文档内容。
+以下工作仍然建议由测试工程师主导完成：
 
-### Q3: Swagger 文件有引用（$ref）能解析吗？
+- 最终测试范围裁剪
+- 高风险链路优先级确认
+- 业务规则补充
+- 测试数据准备与清理策略设计
+- 多角色权限矩阵设计
+- 探索性测试与异常场景挖掘
 
-**答**: 支持解析 Swagger 中的 `$ref` 引用。
+## 后续扩展方向
 
-### Q4: 生成的 pytest 代码可以直接运行吗？
+如果你准备继续扩展这个项目，建议优先考虑：
 
-**答**: 基本框架可直接运行，但认证逻辑需要自行补充。
+- 增加风险分层输出，例如 `smoke / core / full`
+- 增加更强的鉴权识别能力
+- 增加更明确的需求字段抽取规则
+- 增加更完整的错误响应和权限模型识别
+- 让 `references/testcase_examples.md` 与当前字段体系完全对齐
 
-### Q5: 可以生成功能测试用例吗？
+## 协作建议
 
-**答**: 可以，通过 Markdown 格式的需求文档生成功能测试用例。
+当前仓库还没有单独的许可证和协作说明文件。
+如果你准备长期维护或接受外部贡献，建议后续补充：
 
----
+- `LICENSE`
+- `CONTRIBUTING.md`
+- 更明确的版本发布策略
 
-## 十一、文件结构
+## 反馈方式
 
-```
-testcase-generator/
-├── SKILL.md                    # 本文档
-├── references/
-│   └── testcase_examples.md    # 用例模板示例
-└── scripts/
-    ├── main.py                 # 主入口（推荐使用）
-    ├── testcase_generator.py   # 兼容旧版本
-    ├── parsers/                # 文档解析器
-    │   ├── __init__.py
-    │   ├── postman.py
-    │   ├── swagger.py
-    │   ├── markdown.py
-    │   ├── har.py
-    │   └── json_schema.py
-    ├── generators/             # 用例生成器
-    │   ├── __init__.py
-    │   ├── api_generator.py
-    │   └── functional_generator.py
-    ├── formatters/             # 输出格式化器
-    │   ├── __init__.py
-    │   ├── markdown.py
-    │   ├── excel.py
-    │   ├── pytest.py
-    │   ├── postman.py
-    │   └── jmeter.py
-    └── utils/                  # 工具函数
-        ├── __init__.py
-        └── validators.py
-```
+如果你在实际使用中发现以下问题，建议记录下来，作为下一轮优化输入：
 
----
+- 哪类文档最容易解析失败
+- 哪类断言最容易变成 `待确认`
+- 哪些输出字段对测试工程师不够实用
+- 哪些测试类型生成太多或太少
+- 哪些自动化初稿还不够接近真实执行
 
-## 十二、版本历史
-
-| 版本 | 日期 | 更新内容 |
-|------|------|----------|
-| 2.0.0 | 2024-01 | 完整重构，支持多种文档和输出格式 |
-| 1.0.0 | 2023-06 | 初始版本，仅支持 Postman 和 Excel |
+如有建议或问题，欢迎提交 Issue 或 Pull Request。
 
 ---
 
-## 十三、联系方式
-
-如有问题或建议，请提交 Issue 或 Pull Request。
-
----
-
-*Generated by TestCase Generator Skill for Claude Code*
+> 本项目聚焦于将接口文档与需求文档快速转换为结构化测试用例，适合作为测试设计初稿生成工具，建议结合实际业务规则进行二次评审与完善。
