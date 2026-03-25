@@ -327,22 +327,11 @@ python skills/testcase-generator/scripts/main.py   -i ./docs/openapi.yaml   -o a
 
 ## 后续扩展方向
 
-如果你准备继续扩展这个项目，建议优先考虑：
-
 - 增加风险分层输出，例如 `smoke / core / full`
 - 增加更强的鉴权识别能力
 - 增加更明确的需求字段抽取规则
 - 增加更完整的错误响应和权限模型识别
 - 让 `references/testcase_examples.md` 与当前字段体系完全对齐
-
-## 协作建议
-
-当前仓库还没有单独的许可证和协作说明文件。
-如果你准备长期维护或接受外部贡献，建议后续补充：
-
-- `LICENSE`
-- `CONTRIBUTING.md`
-- 更明确的版本发布策略
 
 ## 反馈方式
 
