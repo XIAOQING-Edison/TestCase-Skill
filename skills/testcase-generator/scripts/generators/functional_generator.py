@@ -79,8 +79,8 @@ class FunctionalTestGenerator:
         # 生成安全测试用例
         self._generate_security_tests(feature_name, description, rules)
 
-        # 生成兼容性测试用例
-        self._generate_compatibility_tests(feature_name, description)
+        # 生成兼容性测试用例（按场景触发，避免模板噪音）
+        self._generate_compatibility_tests(feature_name, description, rules)
 
         return self.testcases
 
@@ -341,6 +341,73 @@ class FunctionalTestGenerator:
                     remark=f"规则来源: {rule_text}"
                 )
 
+            if 'price_calculation' in categories:
+                calc_example = self._build_price_calculation_example(rule_text)
+                self._add_testcase(
+                    key=f"{feature_name}:price-calc-core",
+                    title=f"验证{feature_name}满足条件时按最优换购价计算",
+                    priority="P0",
+                    preconditions="购物车中存在可触发加价购的主商品与换购商品",
+                    test_data=calc_example['test_data'],
+                    steps=calc_example['steps'],
+                    expected=calc_example['expected'],
+                    calc_summary=calc_example.get('calc_summary', ''),
+                    category="业务规则",
+                    remark=f"规则来源: {rule_text}"
+                )
+                self._add_testcase(
+                    key=f"{feature_name}:price-calc-priority",
+                    title=f"验证{feature_name}价格计算优先级符合活动规则",
+                    priority="P0",
+                    preconditions="存在商品级活动、会员折扣、加价购与订单级优惠配置",
+                    test_data="同一订单中混合多类促销活动",
+                    steps=f"1. 在{feature_name}流程中录入命中多类促销的商品\n2. 执行价格计算\n3. 检查各商品最终成交价与订单优惠结果",
+                    expected="价格计算顺序符合业务规则，商品级互斥活动优先，加价购与订单级优惠按定义处理，不出现重复优惠",
+                    category="业务规则",
+                    remark=f"规则来源: {rule_text}"
+                )
+
+            if 'promotion_stacking' in categories:
+                stacking_example = self._build_stacking_calculation_example(rule_text)
+                self._add_testcase(
+                    key=f"{feature_name}:promotion-stacking",
+                    title=f"验证{feature_name}促销互斥与叠加规则",
+                    priority="P0",
+                    preconditions="配置单品特价/折扣码/福袋与加价购活动",
+                    test_data=stacking_example['test_data'],
+                    steps=stacking_example['steps'],
+                    expected=stacking_example['expected'],
+                    calc_summary=stacking_example.get('calc_summary', ''),
+                    category="业务规则",
+                    remark=f"规则来源: {rule_text}"
+                )
+
+            if 'recalculation_stability' in categories:
+                self._add_testcase(
+                    key=f"{feature_name}:price-recalc-stability",
+                    title=f"验证{feature_name}资格频繁变化时价格重算稳定性",
+                    priority="P1",
+                    preconditions="购物车支持连续扫码添加/移除商品",
+                    test_data="短时间内连续变更资格状态的商品组合",
+                    steps=f"1. 在{feature_name}中快速连续添加与移除商品\n2. 观察资格状态、浮层提示与价格刷新\n3. 校验提示节流与最终价格",
+                    expected="系统按防抖策略合并短时变化，价格计算结果稳定，无频繁抖动或错价",
+                    category="业务规则",
+                    remark=f"规则来源: {rule_text}"
+                )
+
+            if 'quantity_limit' in categories:
+                self._add_testcase(
+                    key=f"{feature_name}:exchange-quantity-limit",
+                    title=f"验证{feature_name}达到换购上限后的价格处理",
+                    priority="P1",
+                    preconditions="存在单品限换购数量或整单限购配置",
+                    test_data="超过限购阈值的换购商品录入数据",
+                    steps=f"1. 在{feature_name}中持续录入换购商品至超过上限\n2. 观察上限提示与商品价格\n3. 检查超过部分是否按原价结算",
+                    expected="达到上限时系统提示限购规则，超过上限的商品按原价计算且不再享受换购价",
+                    category="反向",
+                    remark=f"规则来源: {rule_text}"
+                )
+
             if 'audit_record' in categories:
                 self._add_testcase(
                     key=f"{feature_name}:audit-record",
@@ -567,16 +634,18 @@ class FunctionalTestGenerator:
                 remark="安全测试用例"
             )
 
-    def _generate_compatibility_tests(self, feature_name: str, description: str):
+    def _generate_compatibility_tests(self, feature_name: str, description: str, rules: List[Dict[str, Any]]):
         """生成兼容性测试用例"""
-        if not any(keyword in description for keyword in ['页面', '列表', '弹窗', '搜索', '按钮']):
+        content = self._normalize_text(feature_name + ' ' + description + ' ' + self._join_rule_texts(rules))
+        if not any(keyword in content for keyword in ['页面', '列表', '弹窗', '搜索', '按钮', '扫码', '终端']):
             return
 
-        # 浏览器兼容
-        browsers = [
-            ("Chrome", "Chrome 最新版本"),
-            ("Edge", "Edge 最新版本"),
-        ]
+        # 管理后台配置类需求默认不生成浏览器/移动端兼容模板
+        if all(keyword in content for keyword in ['后台', '配置']) and '弹窗' not in content:
+            return
+
+        # 浏览器兼容（默认精简为 1 条，降低噪音）
+        browsers = [("Chrome", "Chrome 最新版本")]
 
         for browser, desc in browsers:
             self._add_testcase(
@@ -591,18 +660,33 @@ class FunctionalTestGenerator:
                 remark=f"浏览器兼容性测试 - {browser}"
             )
 
-        # 移动端兼容
-        self._add_testcase(
-            key=f"{feature_name}:mobile:android-chrome",
-            title=f"验证{feature_name}在Android Chrome端",
-            priority="P1",
-            preconditions="使用 Android 手机 Chrome",
-            test_data="标准有效数据",
-            steps=f"1. 打开Android Chrome\n2. 进入{feature_name}\n3. 执行标准操作",
-            expected="Android 手机 Chrome 下功能正常",
-            category="兼容性",
-            remark="移动端兼容性测试 - Android Chrome"
-        )
+        # 仅在明确移动端语义时生成移动端兼容
+        if any(keyword in content for keyword in ['移动', '手机', 'h5', 'android', 'ios']):
+            self._add_testcase(
+                key=f"{feature_name}:mobile:android-chrome",
+                title=f"验证{feature_name}在Android Chrome端",
+                priority="P1",
+                preconditions="使用 Android 手机 Chrome",
+                test_data="标准有效数据",
+                steps=f"1. 打开Android Chrome\n2. 进入{feature_name}\n3. 执行标准操作",
+                expected="Android 手机 Chrome 下功能正常",
+                category="兼容性",
+                remark="移动端兼容性测试 - Android Chrome"
+            )
+
+        # 收银终端一致性（对收银场景比浏览器更关键）
+        if any(keyword in content for keyword in ['自助收银', '人工收银', '终端']):
+            self._add_testcase(
+                key=f"{feature_name}:terminal:consistency",
+                title=f"验证{feature_name}在自助与人工收银终端的一致性",
+                priority="P1",
+                preconditions="自助收银与人工收银环境均可用",
+                test_data="同一组标准业务数据",
+                steps=f"1. 在自助收银终端执行{feature_name}相关操作\n2. 在人工收银终端执行相同操作\n3. 对比结果",
+                expected="两类终端在核心规则、价格计算和提示文案上保持一致",
+                category="兼容性",
+                remark="终端一致性测试"
+            )
 
     def _ensure_rule_dict(self, rule: Any) -> Dict[str, Any]:
         """兼容字符串规则和结构化规则。"""
@@ -631,9 +715,109 @@ class FunctionalTestGenerator:
         """归一化文本，便于关键词匹配。"""
         return re.sub(r'\s+', '', text or '')
 
+    def _extract_amount(self, text: str, default_value: float) -> float:
+        """从文本中提取金额（如 满¥99 / 享¥9.9）。"""
+        match = re.search(r'¥\s*(\d+(?:\.\d+)?)', text)
+        if not match:
+            return default_value
+        return float(match.group(1))
+
+    def _extract_count(self, text: str, default_value: int) -> int:
+        """从文本中提取件数阈值（如 满3件 / 限2件）。"""
+        match = re.search(r'(\d+)\s*件', text)
+        if not match:
+            return default_value
+        return int(match.group(1))
+
+    def _build_price_calculation_example(self, rule_text: str) -> Dict[str, str]:
+        """构造包含详细价格计算过程的用例内容。"""
+        threshold_amount = self._extract_amount(rule_text, 99.0)
+        threshold_qty = self._extract_count(rule_text, 3)
+        exchange_price = self._extract_amount(re.sub(r'满[^¥]*¥', '', rule_text), 9.9)
+
+        base_unit_price = round(max(9.9, threshold_amount / max(threshold_qty, 1)), 2)
+        base_total = round(base_unit_price * threshold_qty, 2)
+        if base_total < threshold_amount:
+            base_total = round(threshold_amount + 1.0, 2)
+            base_unit_price = round(base_total / threshold_qty, 2)
+
+        original_price = round(exchange_price + 10.0, 2)
+        total_with_exchange = round(base_total + exchange_price, 2)
+        total_with_original = round(base_total + original_price, 2)
+        reduced_total = round(base_total - base_unit_price, 2)
+        total_after_rollback = round(reduced_total + original_price, 2)
+
+        test_data = (
+            f"主商品A 单价¥{base_unit_price:.2f} x {threshold_qty}件；"
+            f"换购商品B 原价¥{original_price:.2f}，换购价¥{exchange_price:.2f}；"
+            f"活动门槛按文档规则取“满¥{threshold_amount:.2f}或满{threshold_qty}件”"
+        )
+        steps = (
+            f"1. 扫描主商品A共{threshold_qty}件，并扫描换购商品B 1件\n"
+            f"2. 系统计算主商品金额：{threshold_qty} x ¥{base_unit_price:.2f} = ¥{base_total:.2f}\n"
+            f"3. 判断门槛命中：¥{base_total:.2f} >= ¥{threshold_amount:.2f}，B按换购价¥{exchange_price:.2f}结算\n"
+            f"4. 再移除1件主商品A，重新计算主商品金额：¥{reduced_total:.2f}\n"
+            f"5. 判断门槛失效后，检查B是否恢复原价¥{original_price:.2f}"
+        )
+        expected = (
+            f"命中门槛时总价=¥{base_total:.2f}+¥{exchange_price:.2f}=¥{total_with_exchange:.2f}，"
+            f"并展示加价购标签；"
+            f"门槛失效后换购商品恢复原价，总价=¥{reduced_total:.2f}+¥{original_price:.2f}=¥{total_after_rollback:.2f}；"
+            "价格状态变化与提示文案符合需求规则。"
+        )
+
+        calc_summary = (
+            f"命中: ¥{base_total:.2f}+¥{exchange_price:.2f}=¥{total_with_exchange:.2f}; "
+            f"失效后: ¥{reduced_total:.2f}+¥{original_price:.2f}=¥{total_after_rollback:.2f}"
+        )
+        return {
+            'test_data': test_data,
+            'steps': steps,
+            'expected': expected,
+            'calc_summary': calc_summary
+        }
+
+    def _build_stacking_calculation_example(self, rule_text: str) -> Dict[str, str]:
+        """构造互斥/叠加规则的价格计算示例。"""
+        exchange_price = self._extract_amount(rule_text, 9.9)
+        sku_a_price = 39.0
+        sku_b_price = 59.0
+        sku_c_price = 19.9
+        order_discount = 10.0
+
+        subtotal = round(sku_a_price + sku_b_price + exchange_price, 2)
+        final_total = round(subtotal - order_discount, 2)
+
+        test_data = (
+            f"商品A：原价¥{sku_a_price:.2f}（单品折扣商品，按互斥规则不参与加价购）；"
+            f"商品B：原价¥{sku_b_price:.2f}（可触发加价购资格）；"
+            f"商品C：原价¥{sku_c_price:.2f}，换购价¥{exchange_price:.2f}；"
+            f"订单级优惠：满减¥{order_discount:.2f}"
+        )
+        steps = (
+            "1. 扫描商品A、商品B和商品C，触发促销计算\n"
+            "2. 校验商品A因已享受商品级优惠被排除，不参与加价购资格计算\n"
+            f"3. 校验商品C按换购价¥{exchange_price:.2f}结算，不再叠加商品级优惠\n"
+            f"4. 计算订单小计：¥{sku_a_price:.2f}+¥{sku_b_price:.2f}+¥{exchange_price:.2f}=¥{subtotal:.2f}\n"
+            f"5. 应用订单级满减¥{order_discount:.2f}后，计算实付金额"
+        )
+        expected = (
+            f"互斥规则生效：商品A不参与加价购；商品C锁定换购价¥{exchange_price:.2f}；"
+            f"订单级优惠可叠加，最终实付=¥{subtotal:.2f}-¥{order_discount:.2f}=¥{final_total:.2f}；"
+            "计算顺序与叠加范围符合需求文档逻辑。"
+        )
+
+        calc_summary = f"小计: ¥{subtotal:.2f}; 满减后实付: ¥{final_total:.2f}"
+        return {
+            'test_data': test_data,
+            'steps': steps,
+            'expected': expected,
+            'calc_summary': calc_summary
+        }
+
     def _add_testcase(self, key: str, title: str, priority: str, preconditions: str,
                       test_data: str, steps: str, expected: str,
-                      category: str = "功能", remark: str = ""):
+                      category: str = "功能", remark: str = "", calc_summary: str = ""):
         """按业务 key 去重后添加测试用例。"""
         if key in self.generated_case_keys:
             return
@@ -646,12 +830,14 @@ class FunctionalTestGenerator:
             steps=steps,
             expected=expected,
             category=category,
-            remark=remark
+            remark=remark,
+            calc_summary=calc_summary
         ))
 
     def _create_testcase(self, title: str, priority: str, preconditions: str,
                          test_data: str, steps: str, expected: str,
-                         category: str = "功能", remark: str = "") -> Dict:
+                         category: str = "功能", remark: str = "",
+                         calc_summary: str = "") -> Dict:
         """创建单个测试用例"""
         tc = {
             "功能ID": f"FUNC_{self.module_name.upper()}_{self.testcase_id:03d}",
@@ -662,6 +848,7 @@ class FunctionalTestGenerator:
             "测试数据": test_data,
             "执行步骤": steps,
             "预期结果": expected,
+            "计算过程摘要": calc_summary,
             "测试结果": "待执行",
             "测试版本号": "v1.0.0",
             "测试人员": "",

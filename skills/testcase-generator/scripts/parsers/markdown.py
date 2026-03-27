@@ -151,9 +151,20 @@ class MarkdownParser:
     def _parse_requirement_doc(self) -> List[Dict[str, Any]]:
         """解析需求文档，输出功能测试生成器可消费的 feature 列表。"""
         scoped_lines = self._extract_requirement_scope()
-        features = self._parse_requirement_features(scoped_lines)
-        if features:
-            return features
+        heading_features = self._parse_requirement_features(scoped_lines)
+        table_features = self._extract_requirement_table_features(scoped_lines)
+
+        merged_features = []
+        seen = set()
+        for feature in heading_features + table_features:
+            name = feature.get('name', '').strip()
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            merged_features.append(feature)
+
+        if merged_features:
+            return merged_features
 
         fallback_feature = {
             'name': self._extract_title(),
@@ -213,6 +224,127 @@ class MarkdownParser:
             seen.add(name)
             deduped.append(feature)
         return deduped
+
+    def _extract_requirement_table_features(self, lines: List[str]) -> List[Dict[str, Any]]:
+        """从“功能项 + 需求说明”类表格中提取功能点。"""
+        features = []
+        i = 0
+        last_client = ''
+
+        while i < len(lines) - 1:
+            header_line = lines[i].strip()
+            separator_line = lines[i + 1].strip()
+
+            if '|' not in header_line or '|' not in separator_line:
+                i += 1
+                continue
+
+            if not re.match(r'^\|?[\s:\-|\u2013]+\|?$', separator_line):
+                i += 1
+                continue
+
+            headers = [cell.strip() for cell in self._split_table_row(header_line)]
+            lower_headers = [h.lower() for h in headers]
+
+            func_idx = self._find_header_index(lower_headers, ['功能项', '功能点', '功能模块'])
+            desc_idx = self._find_header_index(lower_headers, ['需求说明', '说明', '规则说明'])
+            client_idx = self._find_header_index(lower_headers, ['客户端', '终端', '渠道'])
+
+            if func_idx < 0 or desc_idx < 0:
+                i += 1
+                continue
+
+            i += 2
+            while i < len(lines):
+                row_line = lines[i].strip()
+                if '|' not in row_line:
+                    break
+
+                row = self._split_table_row(row_line)
+                if not row:
+                    i += 1
+                    continue
+
+                # 跳过表头分隔行
+                if all(re.match(r'^[:\-\s]+$', cell or '') for cell in row):
+                    i += 1
+                    continue
+
+                row_data = {idx: row[idx].strip() if idx < len(row) else '' for idx in range(len(headers))}
+                client_val = row_data.get(client_idx, '') if client_idx >= 0 else ''
+                function_val = row_data.get(func_idx, '')
+                description_val = row_data.get(desc_idx, '')
+
+                # 兼容“首列缺失导致整行左移”的常见场景。
+                if client_idx == 0 and func_idx == 1 and not function_val and client_val:
+                    function_val = client_val
+                    client_val = last_client
+
+                    if not description_val:
+                        desc_candidates = []
+                        for idx in [desc_idx - 1, desc_idx - 2, func_idx + 1, len(row) - 2]:
+                            if 0 <= idx < len(row):
+                                desc_candidates.append(row[idx].strip())
+                        for candidate in desc_candidates:
+                            if len(candidate) > 16:
+                                description_val = candidate
+                                break
+
+                if client_val and self._looks_like_client_value(client_val):
+                    last_client = client_val
+
+                function_val = self._normalize_feature_name(function_val)
+                description_val = description_val.strip()
+
+                if not function_val or len(function_val) < 2 or not description_val:
+                    i += 1
+                    continue
+
+                if not self._looks_like_requirement_description(description_val):
+                    i += 1
+                    continue
+
+                current_client = client_val if self._looks_like_client_value(client_val) else last_client
+                if current_client and function_val and current_client not in function_val:
+                    feature_name = f"{current_client} - {function_val}"
+                else:
+                    feature_name = function_val
+
+                features.append({
+                    'name': feature_name,
+                    'description': description_val,
+                    'fields': self._extract_fields([description_val]),
+                    'rules': self._extract_business_rules([description_val])
+                })
+                i += 1
+
+        return features
+
+    def _looks_like_client_value(self, value: str) -> bool:
+        """判断值是否更像客户端/终端名称。"""
+        normalized = (value or '').strip()
+        if not normalized:
+            return False
+        keywords = ['收银', '后台', '终端', '客户端', '渠道']
+        return any(keyword in normalized for keyword in keywords)
+
+    def _find_header_index(self, headers: List[str], candidates: List[str]) -> int:
+        """在表头中查找候选列名索引。"""
+        for idx, header in enumerate(headers):
+            if any(candidate in header for candidate in candidates):
+                return idx
+        return -1
+
+    def _looks_like_requirement_description(self, description: str) -> bool:
+        """判断文本是否像需求描述而非噪音内容。"""
+        if len(description) < 8:
+            return False
+        if description.count('{') > 8 and description.count('}') > 8:
+            return False
+        return any(keyword in description for keyword in [
+            '支持', '展示', '提示', '规则', '条件', '限制',
+            '弹窗', '扫码', '换购', '结算', '活动'
+        ])
 
     def _parse_param_table(self, start_idx: int) -> (List[Dict], int):
         """解析参数表格"""
@@ -461,6 +593,24 @@ class MarkdownParser:
             categories.append('state_retention')
         if '增量更新' in normalized and '未来版本' in normalized:
             categories.append('data_sync')
+        if any(keyword in normalized for keyword in [
+            '价格计算', '计算策略', '换购价', '原价', '恢复原价',
+            '最优换购价格', '优先级规则', '资格计算'
+        ]):
+            categories.append('price_calculation')
+        if any(keyword in normalized for keyword in [
+            '互斥', '叠加', '不能参与', '不可叠加', '不再享受',
+            '排除在加价购活动计算范围'
+        ]):
+            categories.append('promotion_stacking')
+        if any(keyword in normalized for keyword in [
+            '防抖', '300ms', '连续变化', '资格反复变化', '合并提示'
+        ]):
+            categories.append('recalculation_stability')
+        if any(keyword in normalized for keyword in [
+            '限购', '限换购', '换购上限', '最多可换购', '超过数量按原价'
+        ]):
+            categories.append('quantity_limit')
         if '导入导出管理' in normalized or '下载导入文件' in normalized:
             categories.append('audit_record')
         if '任务成功' in normalized or '提醒任务成功' in normalized:

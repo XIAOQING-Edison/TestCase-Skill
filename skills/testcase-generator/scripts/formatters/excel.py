@@ -59,7 +59,7 @@ class ExcelFormatter:
         else:
             headers = [
                 "功能ID", "用例标题", "功能模块", "优先级", "预置条件",
-                "测试数据", "执行步骤", "预期结果", "测试结果",
+                "测试数据", "执行步骤", "预期结果", "计算过程摘要", "测试结果",
                 "测试版本号", "测试人员", "断言来源", "是否为假设", "备注", "测试类型"
             ]
             fill_color = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
